@@ -151,7 +151,7 @@ storeSchema.pre('save', function (next) {
 storeSchema.index({ owner: 1 });
 storeSchema.index({ category: 1 });
 storeSchema.index({ isActive: 1, isVerified: 1 });
-storeSchema.index({ slug: 1 });
+// slug unique: true already creates an index
 storeSchema.index({ 'address.city': 1 });
 storeSchema.index({ rating: -1 });
 

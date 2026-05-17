@@ -1,351 +1,290 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const mongoose = require('mongoose');
 const connectDB = require('../config/database');
 const User = require('../models/User');
 const Store = require('../models/Store');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Subscription = require('../models/Subscription');
+const UserSubscription = require('../models/UserSubscription');
+const Delivery = require('../models/Delivery');
 const logger = require('../utils/logger');
-const { generateAccessToken } = require('../utils/jwt');
+const notifier = require('./notifier');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 if (!TOKEN) {
-  logger.error('TELEGRAM_BOT_TOKEN not set');
+  logger.error('TELEGRAM_BOT_TOKEN .env da ko\'rsatilmagan');
   process.exit(1);
 }
 
-const isWebhookMode = process.env.BOT_MODE === 'webhook';
-
-let bot;
-
-if (isWebhookMode) {
-  bot = new TelegramBot(TOKEN);
-} else {
-  bot = new TelegramBot(TOKEN, {
-    polling: {
-      interval: 300,
-      autoStart: true,
-      params: { timeout: 10 }
-    }
-  });
-}
-
-// User sessions
-const userSessions = new Map();
-
-const getSession = (chatId) => {
-  if (!userSessions.has(chatId)) {
-    userSessions.set(chatId, { step: 'main', data: {} });
+const bot = new TelegramBot(TOKEN, {
+  polling: {
+    interval: 300,
+    autoStart: true,
+    params: { timeout: 10 }
   }
-  return userSessions.get(chatId);
-};
+});
 
-const setSession = (chatId, data) => {
-  userSessions.set(chatId, { ...getSession(chatId), ...data });
-};
+// ─── User sessions ────────────────────────────────────────────────────────────
+const sessions = new Map();
+
+const getSession = (id) => sessions.get(id) || { step: 'main', data: {} };
+const setSession = (id, update) => sessions.set(id, { ...getSession(id), ...update });
+const clearSession = (id) => sessions.set(id, { step: 'main', data: {} });
 
 // ─── Keyboards ────────────────────────────────────────────────────────────────
 
-const mainMenuKeyboard = (isLoggedIn = false, role = 'client') => {
-  const buttons = [];
+const mainMenu = (loggedIn = false, role = 'client') => {
+  const rows = [];
 
-  if (!isLoggedIn) {
-    buttons.push([{ text: '🔐 Kirish' }, { text: '📝 Ro\'yxatdan o\'tish' }]);
+  if (!loggedIn) {
+    rows.push([{ text: '🔐 Kirish' }, { text: '📝 Ro\'yxatdan o\'tish' }]);
+    rows.push([{ text: 'ℹ️ Bot haqida' }]);
   } else {
-    if (role === 'client' || role === 'admin') {
-      buttons.push([{ text: '🏪 Do\'konlar' }, { text: '📦 Mahsulotlar' }]);
-      buttons.push([{ text: '🛒 Mening buyurtmalarim' }, { text: '👤 Profilim' }]);
+    if (role === 'client') {
+      rows.push([{ text: '🏪 Do\'konlar' }, { text: '🔍 Qidiruv' }]);
+      rows.push([{ text: '🛒 Buyurtmalarim' }, { text: '❤️ Sevimlilar' }]);
+      rows.push([{ text: '👤 Profilim' }, { text: '📞 Aloqa' }]);
     }
-    if (role === 'seller' || role === 'admin') {
-      buttons.push([{ text: '🏬 Mening do\'konim' }, { text: '📊 Statistika' }]);
-      buttons.push([{ text: '📋 Buyurtmalar' }, { text: '💳 Obuna' }]);
+    if (role === 'seller') {
+      rows.push([{ text: '🏬 Mening do\'konim' }, { text: '📦 Mahsulotlar' }]);
+      rows.push([{ text: '📋 Buyurtmalar' }, { text: '🚗 Avtomobillar' }]);
+      rows.push([{ text: '💳 Obuna' }, { text: '📊 Statistika' }]);
+      rows.push([{ text: '👤 Profilim' }]);
     }
     if (role === 'driver') {
-      buttons.push([{ text: '🚚 Mening yetkazmalarim' }]);
-      buttons.push([{ text: '👤 Profilim' }]);
+      rows.push([{ text: '🚚 Yetkazmalarim' }, { text: '📍 Joylashuv' }]);
+      rows.push([{ text: '👤 Profilim' }]);
     }
     if (role === 'admin') {
-      buttons.push([{ text: '⚙️ Admin panel' }]);
+      rows.push([{ text: '🏪 Do\'konlar' }, { text: '👥 Foydalanuvchilar' }]);
+      rows.push([{ text: '📋 Buyurtmalar' }, { text: '💳 Obunalar' }]);
+      rows.push([{ text: '📊 Dashboard' }, { text: '👤 Profilim' }]);
     }
-    buttons.push([{ text: '❌ Chiqish' }]);
+    rows.push([{ text: '❌ Chiqish' }]);
   }
 
-  return {
-    keyboard: buttons,
-    resize_keyboard: true,
-    one_time_keyboard: false
-  };
+  return { keyboard: rows, resize_keyboard: true };
 };
 
-const cancelKeyboard = () => ({
-  keyboard: [[{ text: '❌ Bekor qilish' }]],
+const cancelKb = () => ({
+  keyboard: [[{ text: '⬅️ Orqaga' }]],
   resize_keyboard: true
 });
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Utils ────────────────────────────────────────────────────────────────────
 
-const formatCurrency = (amount) =>
-  new Intl.NumberFormat('uz-UZ').format(amount) + ' UZS';
+const fmt = (n) => new Intl.NumberFormat('uz-UZ').format(n) + ' UZS';
 
-const statusEmoji = {
-  pending: '⏳',
-  confirmed: '✅',
-  preparing: '👨‍🍳',
-  delivering: '🚚',
-  delivered: '✔️',
-  cancelled: '❌',
-  refunded: '↩️'
+const statusLabel = {
+  pending: '⏳ Kutilmoqda', confirmed: '✅ Tasdiqlandi',
+  preparing: '👨‍🍳 Tayyorlanmoqda', delivering: '🚚 Yetkazilmoqda',
+  delivered: '✔️ Yetkazildi', cancelled: '❌ Bekor qilindi'
 };
 
-const statusText = {
-  pending: 'Kutilmoqda',
-  confirmed: 'Tasdiqlandi',
-  preparing: 'Tayyorlanmoqda',
-  delivering: 'Yetkazilmoqda',
-  delivered: 'Yetkazildi',
-  cancelled: 'Bekor qilindi',
-  refunded: 'Qaytarildi'
-};
+const getUser = (chatId) => User.findOne({ telegramId: String(chatId), isActive: true });
 
-const getUserFromTelegram = async (telegramId) => {
-  return User.findOne({ telegramId: String(telegramId), isActive: true });
-};
+const send = (chatId, text, opts = {}) =>
+  bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...opts });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ─── /start ───────────────────────────────────────────────────────────────────
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const firstName = msg.from.first_name || 'Foydalanuvchi';
+  clearSession(chatId);
+  const user = await getUser(chatId);
 
-  setSession(chatId, { step: 'main', data: {} });
+  const text = user
+    ? `👋 Xush kelibsiz qaytib, *${user.name}*!`
+    : `🏗️ *Stroy Market Uzbekistan*\n\nQurilish materiallari bozorida xush kelibsiz!\n\n` +
+      `🏪 Do'konlar | 📦 Mahsulotlar | 🛒 Buyurtma | 🚚 Yetkazish\n\n` +
+      `Davom etish uchun *Kirish* yoki *Ro'yxatdan o'tish* tugmasini bosing.`;
 
-  const user = await getUserFromTelegram(chatId);
-
-  const welcomeText = user
-    ? `👋 Xush kelibsiz, *${user.name}*!\n\nStroy Market Uzbekistan botiga qaytib keldingiz.`
-    : `🏗️ *Stroy Market Uzbekistan*\n\nSalom, *${firstName}*! Qurilish materiallari bozorida xush kelibsiz!\n\n` +
-      `• 🏪 Do'konlarni ko'ring\n` +
-      `• 📦 Mahsulotlar toping\n` +
-      `• 🛒 Buyurtma bering\n` +
-      `• 🚚 Yetkazib berish\n\n` +
-      `Davom etish uchun kirish yoki ro'yxatdan o'ting.`;
-
-  await bot.sendMessage(chatId, welcomeText, {
-    parse_mode: 'Markdown',
-    reply_markup: mainMenuKeyboard(!!user, user?.role)
-  });
+  await send(chatId, text, { reply_markup: mainMenu(!!user, user?.role) });
 });
+
+// ─── /help ────────────────────────────────────────────────────────────────────
 
 bot.onText(/\/help/, async (msg) => {
-  const chatId = msg.chat.id;
-  const helpText = `
-📖 *Buyruqlar ro'yxati:*
+  await send(msg.chat.id, `
+📖 *Buyruqlar:*
 
-/start - Bosh menyu
-/login - Tizimga kirish
-/register - Ro'yxatdan o'tish
-/orders - Buyurtmalarim
-/stores - Do'konlar
-/products - Mahsulotlar
-/profile - Profilim
-/subscription - Obuna
-/track [kod] - Buyurtma kuzatuvi
-/help - Yordam
-/logout - Chiqish
+/start — Bosh menyu
+/login — Kirish
+/register — Ro'yxatdan o'tish
+/orders — Buyurtmalarim
+/stores — Do'konlar ro'yxati
+/subscription — Obuna rejalari
+/track \`KOD\` — Buyurtma kuzatuvi
+/profile — Profilim
+/logout — Chiqish
+/help — Yordam
 
-📞 *Murojaat uchun:* @stroyuzbekisatn_bot
-  `;
-
-  await bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+📞 Muammo bo'lsa: @stroyuzbekisatn_bot
+  `.trim());
 });
 
-// ─── Login ────────────────────────────────────────────────────────────────────
+// ─── /login ───────────────────────────────────────────────────────────────────
 
 bot.onText(/\/login/, async (msg) => {
   const chatId = msg.chat.id;
+  const existing = await getUser(chatId);
+  if (existing) {
+    return send(chatId, `✅ Siz allaqachon kirgansiz, *${existing.name}*`, {
+      reply_markup: mainMenu(true, existing.role)
+    });
+  }
   setSession(chatId, { step: 'login_phone', data: {} });
-
-  await bot.sendMessage(chatId, '📱 Telefon raqamingizni kiriting:\n_(+998XXXXXXXXX formatida)_', {
-    parse_mode: 'Markdown',
-    reply_markup: cancelKeyboard()
-  });
+  await send(chatId, '📱 Telefon raqamingizni kiriting:\n`+998901234567`', { reply_markup: cancelKb() });
 });
 
-// ─── Register ─────────────────────────────────────────────────────────────────
+// ─── /register ────────────────────────────────────────────────────────────────
 
 bot.onText(/\/register/, async (msg) => {
   const chatId = msg.chat.id;
-  setSession(chatId, { step: 'register_name', data: {} });
-
-  await bot.sendMessage(chatId, '✍️ Ismingizni kiriting:', {
-    reply_markup: cancelKeyboard()
-  });
+  setSession(chatId, { step: 'reg_name', data: {} });
+  await send(chatId, '✍️ *Ro\'yxatdan o\'tish*\n\nIsmingizni kiriting:', { reply_markup: cancelKb() });
 });
 
-// ─── Orders ───────────────────────────────────────────────────────────────────
+// ─── /orders ──────────────────────────────────────────────────────────────────
 
 bot.onText(/\/orders/, async (msg) => {
   const chatId = msg.chat.id;
-  const user = await getUserFromTelegram(chatId);
+  const user = await getUser(chatId);
+  if (!user) return send(chatId, '⚠️ Avval kiring: /login');
 
-  if (!user) {
-    return bot.sendMessage(chatId, '⚠️ Avval tizimga kiring. /login');
-  }
+  const filter = user.role === 'client' ? { buyer: user._id } :
+    user.role === 'driver' ? { driver: user._id } : {};
 
-  const orders = await Order.find({ buyer: user._id })
+  const orders = await Order.find(filter)
     .populate('store', 'name')
-    .sort('-createdAt')
-    .limit(5);
+    .populate('buyer', 'name')
+    .sort('-createdAt').limit(8).lean();
 
-  if (orders.length === 0) {
-    return bot.sendMessage(chatId, '📭 Hali buyurtma yo\'q.');
-  }
+  if (!orders.length) return send(chatId, '📭 Buyurtmalar yo\'q.');
 
-  let text = '🛒 *So\'nggi buyurtmalarim:*\n\n';
+  let text = `🛒 *${user.role === 'driver' ? 'Tayinlangan yetkazmalar' : 'Buyurtmalarim'}:*\n\n`;
   orders.forEach((o) => {
-    text += `${statusEmoji[o.status]} *${o.orderNumber}*\n`;
-    text += `  🏪 ${o.store?.name || 'Do\'kon'}\n`;
-    text += `  💰 ${formatCurrency(o.totalPrice)}\n`;
-    text += `  📌 ${statusText[o.status]}\n\n`;
+    text += `📋 *${o.orderNumber}*\n`;
+    if (o.store) text += `  🏪 ${o.store.name}\n`;
+    text += `  💰 ${fmt(o.totalPrice)}\n`;
+    text += `  ${statusLabel[o.status] || o.status}\n\n`;
   });
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  await send(chatId, text);
 });
 
-// ─── Track order ──────────────────────────────────────────────────────────────
+// ─── /track ───────────────────────────────────────────────────────────────────
 
 bot.onText(/\/track (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const trackingCode = match[1].trim();
+  const code = match[1].trim().toUpperCase();
 
-  const Delivery = require('../models/Delivery');
-  const delivery = await Delivery.findOne({ trackingCode })
+  const delivery = await Delivery.findOne({ trackingCode: code })
     .populate('driver', 'name phone')
-    .populate('order', 'orderNumber status')
-    .lean();
+    .populate('vehicle', 'name plateNumber')
+    .populate('order', 'orderNumber status deliveryAddress').lean();
 
   if (!delivery) {
-    return bot.sendMessage(chatId, `❌ *${trackingCode}* kodi bilan yetkazma topilmadi.`, { parse_mode: 'Markdown' });
+    return send(chatId, `❌ *${code}* kodi bilan yetkazma topilmadi.`);
   }
 
-  const text = `
-📦 *Buyurtma kuzatuvi*
+  const statusMap = {
+    assigned: '📌 Tayinlandi', picked_up: '📦 Olindi',
+    in_transit: '🚚 Yo\'lda', delivered: '✅ Yetkazildi', failed: '❌ Muvaffaqiyatsiz'
+  };
 
-🔖 Kod: \`${trackingCode}\`
-📌 Holat: ${statusEmoji[delivery.status]} ${statusText[delivery.status] || delivery.status}
-${delivery.driver ? `🚗 Haydovchi: ${delivery.driver.name} (${delivery.driver.phone})` : ''}
-${delivery.currentLocation ? `📍 Joylashuv: [Xaritada ko'rish](https://maps.google.com/?q=${delivery.currentLocation.latitude},${delivery.currentLocation.longitude})` : ''}
-  `.trim();
+  let text = `📦 *Buyurtma kuzatuvi*\n\n`;
+  text += `🔖 Kod: \`${code}\`\n`;
+  text += `📌 Holat: ${statusMap[delivery.status] || delivery.status}\n`;
+  if (delivery.driver) text += `👤 Haydovchi: ${delivery.driver.name} (${delivery.driver.phone})\n`;
+  if (delivery.vehicle) text += `🚗 Avtomobil: ${delivery.vehicle.name} | ${delivery.vehicle.plateNumber}\n`;
+  if (delivery.currentLocation) {
+    text += `📍 [Xaritada ko'rish](https://maps.google.com/?q=${delivery.currentLocation.latitude},${delivery.currentLocation.longitude})\n`;
+  }
+  if (delivery.order?.deliveryAddress?.fullAddress) {
+    text += `🏠 Manzil: ${delivery.order.deliveryAddress.fullAddress}\n`;
+  }
 
-  await bot.sendMessage(chatId, text, {
-    parse_mode: 'Markdown',
-    disable_web_page_preview: true
-  });
+  await send(chatId, text, { disable_web_page_preview: true });
 });
 
-// ─── Stores ───────────────────────────────────────────────────────────────────
+// ─── /stores ──────────────────────────────────────────────────────────────────
 
 bot.onText(/\/stores/, async (msg) => {
   const chatId = msg.chat.id;
 
-  const stores = await Store.find({ isActive: true, isVerified: true })
-    .sort('-rating')
-    .limit(10)
-    .lean();
+  const stores = await Store.find({ isActive: true })
+    .sort({ isFeatured: -1, rating: -1 })
+    .limit(10).lean();
 
-  if (stores.length === 0) {
-    return bot.sendMessage(chatId, '🏪 Do\'konlar topilmadi.');
-  }
+  if (!stores.length) return send(chatId, '🏪 Do\'konlar topilmadi.');
 
-  let text = '🏪 *Mashhur do\'konlar:*\n\n';
-  stores.forEach((s, i) => {
-    text += `${i + 1}. *${s.name}*\n`;
-    text += `  ⭐ ${s.rating.toFixed(1)} | 📦 ${s.subscriptionPlan.toUpperCase()}\n`;
-    if (s.address?.city) text += `  📍 ${s.address.city}\n`;
-    text += '\n';
+  const buttons = stores.map((s) => ([{
+    text: `${s.isVerified ? '✅ ' : ''}${s.name} ⭐${s.rating.toFixed(1)}`,
+    callback_data: `store_${s._id}`
+  }]));
+
+  await bot.sendMessage(chatId, '🏪 *Do\'konlar ro\'yxati:*', {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: buttons }
   });
-
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
 });
 
-// ─── Subscription ─────────────────────────────────────────────────────────────
+// ─── /subscription ────────────────────────────────────────────────────────────
 
 bot.onText(/\/subscription/, async (msg) => {
   const chatId = msg.chat.id;
-  const user = await getUserFromTelegram(chatId);
 
-  if (!user || user.role !== 'seller') {
-    return bot.sendMessage(chatId, '⚠️ Bu buyruq faqat sotuvchilar uchun.');
-  }
-
-  const subs = await Subscription.find({ isActive: true }).sort('order');
-  const UserSubscription = require('../models/UserSubscription');
-  const current = await UserSubscription.findOne({ user: user._id, isActive: true })
-    .populate('subscription');
+  const plans = await Subscription.find({ isActive: true }).sort('order').lean();
 
   let text = '💳 *Obuna rejalari:*\n\n';
-
-  if (current) {
-    const daysLeft = Math.ceil((new Date(current.endDate) - new Date()) / (1000 * 60 * 60 * 24));
-    text += `✅ *Joriy obuna:* ${current.subscription?.displayName || 'Noma\'lum'}\n`;
-    text += `⏰ Qolgan kunlar: ${Math.max(0, daysLeft)} kun\n\n`;
-  }
-
-  subs.forEach((s) => {
-    const isCurrent = current?.subscription?.name === s.name;
-    text += `${isCurrent ? '✅ ' : ''}*${s.displayName}*\n`;
-    text += `  💰 ${formatCurrency(s.price)}/oy\n`;
-    text += `  📦 ${s.maxProducts >= 999999 ? 'Cheksiz' : s.maxProducts} mahsulot\n`;
-    text += `  🚗 ${s.maxVehicles >= 999999 ? 'Cheksiz' : s.maxVehicles} avtomobil\n\n`;
+  plans.forEach((p) => {
+    const badge = p.name === 'gold' ? '🥇' : p.name === 'silver' ? '🥈' : '🥉';
+    text += `${badge} *${p.displayName}* — ${fmt(p.price)}/oy\n`;
+    text += `  📦 ${p.maxProducts >= 999999 ? 'Cheksiz' : p.maxProducts} mahsulot\n`;
+    text += `  🚗 ${p.maxVehicles >= 999999 ? 'Cheksiz' : p.maxVehicles} avtomobil\n`;
+    if (p.featuresUz?.length) {
+      text += p.featuresUz.map((f) => `  ✓ ${f}`).join('\n') + '\n';
+    }
+    text += '\n';
   });
 
-  text += '🔗 To\'liq ma\'lumot va sotib olish uchun veb-saytimizga kiring.';
+  text += '_Sotib olish uchun API: POST /api/v1/subscriptions/purchase_';
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  await send(chatId, text);
 });
 
-// ─── Profile ──────────────────────────────────────────────────────────────────
+// ─── /profile ─────────────────────────────────────────────────────────────────
 
 bot.onText(/\/profile/, async (msg) => {
   const chatId = msg.chat.id;
-  const user = await getUserFromTelegram(chatId);
+  const user = await getUser(chatId);
 
-  if (!user) {
-    return bot.sendMessage(chatId, '⚠️ Avval tizimga kiring. /login');
-  }
+  if (!user) return send(chatId, '⚠️ Avval kiring: /login');
 
-  const roleNames = { admin: 'Admin', seller: 'Sotuvchi', client: 'Mijoz', driver: 'Haydovchi' };
+  const roleLabel = { admin: 'Admin 👑', seller: 'Sotuvchi 🏪', client: 'Mijoz 🛒', driver: 'Haydovchi 🚗' };
 
-  let text = `👤 *Profilim*\n\n`;
-  text += `👤 Ism: *${user.name}*\n`;
-  text += `📱 Telefon: *${user.phone}*\n`;
+  let text = `👤 *Profil*\n\n`;
+  text += `📛 Ism: *${user.name}*\n`;
+  text += `📱 Tel: *${user.phone}*\n`;
   if (user.email) text += `📧 Email: *${user.email}*\n`;
-  text += `🎭 Rol: *${roleNames[user.role] || user.role}*\n`;
-  text += `📅 Ro'yxatdan o'tgan: *${new Date(user.createdAt).toLocaleDateString('uz-UZ')}*\n`;
+  text += `🎭 Rol: *${roleLabel[user.role] || user.role}*\n`;
+  text += `📅 A'zo bo'lgan: *${new Date(user.createdAt).toLocaleDateString('uz-UZ')}*\n`;
 
-  await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  await send(chatId, text);
 });
 
-// ─── Logout ───────────────────────────────────────────────────────────────────
+// ─── /logout ──────────────────────────────────────────────────────────────────
 
 bot.onText(/\/logout/, async (msg) => {
   const chatId = msg.chat.id;
-  const user = await getUserFromTelegram(chatId);
-
-  if (user) {
-    await User.findByIdAndUpdate(user._id, {
-      $unset: { telegramId: 1, telegramUsername: 1 }
-    });
-  }
-
-  setSession(chatId, { step: 'main', data: {} });
-
-  await bot.sendMessage(chatId, '👋 Tizimdan muvaffaqiyatli chiqdingiz.', {
-    reply_markup: mainMenuKeyboard(false)
+  await User.findOneAndUpdate({ telegramId: String(chatId) }, {
+    $unset: { telegramId: 1, telegramUsername: 1 }
   });
+  clearSession(chatId);
+  await send(chatId, '👋 Tizimdan chiqdingiz.', { reply_markup: mainMenu(false) });
 });
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -353,152 +292,224 @@ bot.onText(/\/logout/, async (msg) => {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
-
   if (!text || text.startsWith('/')) return;
 
   const session = getSession(chatId);
 
-  // Cancel
-  if (text === '❌ Bekor qilish') {
-    setSession(chatId, { step: 'main', data: {} });
-    const user = await getUserFromTelegram(chatId);
-    return bot.sendMessage(chatId, '✅ Bekor qilindi.', {
-      reply_markup: mainMenuKeyboard(!!user, user?.role)
+  // ── Back / Cancel ────────────────────────────────────────────────────────
+  if (text === '⬅️ Orqaga' || text === '❌ Bekor qilish') {
+    clearSession(chatId);
+    const user = await getUser(chatId);
+    return send(chatId, '🏠 Bosh menyu', { reply_markup: mainMenu(!!user, user?.role) });
+  }
+
+  // ── Menu shortcuts ────────────────────────────────────────────────────────
+  const shortcuts = {
+    '🔐 Kirish': '/login',
+    '📝 Ro\'yxatdan o\'tish': '/register',
+    '🏪 Do\'konlar': '/stores',
+    '🛒 Buyurtmalarim': '/orders',
+    '📋 Buyurtmalar': '/orders',
+    '🚚 Yetkazmalarim': '/orders',
+    '👤 Profilim': '/profile',
+    '💳 Obuna': '/subscription',
+    '❌ Chiqish': '/logout'
+  };
+
+  if (shortcuts[text]) {
+    return bot.emit('text', { ...msg, text: shortcuts[text] });
+  }
+
+  // ── 🏬 Mening do'konim ────────────────────────────────────────────────────
+  if (text === '🏬 Mening do\'konim') {
+    const user = await getUser(chatId);
+    if (!user) return send(chatId, '⚠️ Avval kiring: /login');
+
+    const store = await Store.findOne({ owner: user._id })
+      .populate('category', 'name').lean();
+
+    if (!store) {
+      return send(chatId, '📭 Sizda do\'kon yo\'q. API orqali yarating:\nPOST /api/v1/stores');
+    }
+
+    const Product = require('../models/Product');
+    const productCount = await Product.countDocuments({ store: store._id, isActive: true });
+
+    let info = `🏬 *${store.name}*\n\n`;
+    info += `📦 Mahsulotlar: ${productCount} / ${store.maxProducts >= 999999 ? '∞' : store.maxProducts}\n`;
+    info += `🚗 Avtomobil limiti: ${store.maxVehicles >= 999999 ? '∞' : store.maxVehicles}\n`;
+    info += `⭐ Reyting: ${store.rating.toFixed(1)}/5\n`;
+    info += `🏆 Obuna: ${store.subscriptionPlan.toUpperCase()}\n`;
+    info += `${store.isVerified ? '✅ Tasdiqlangan' : '⏳ Tasdiqlanmagan'}\n`;
+    if (store.phone) info += `📞 Tel: ${store.phone}\n`;
+
+    return send(chatId, info);
+  }
+
+  // ── 📊 Statistika ─────────────────────────────────────────────────────────
+  if (text === '📊 Statistika') {
+    const user = await getUser(chatId);
+    if (!user) return send(chatId, '⚠️ Avval kiring: /login');
+
+    const store = await Store.findOne({ owner: user._id });
+    if (!store) return send(chatId, '📭 Do\'kon topilmadi.');
+
+    const [totalOrders, pendingOrders, delivered] = await Promise.all([
+      Order.countDocuments({ store: store._id }),
+      Order.countDocuments({ store: store._id, status: 'pending' }),
+      Order.countDocuments({ store: store._id, status: 'delivered' })
+    ]);
+
+    const rev = await Order.aggregate([
+      { $match: { store: store._id, status: 'delivered', paymentStatus: 'paid' } },
+      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
+    ]);
+
+    let text2 = `📊 *${store.name} statistikasi*\n\n`;
+    text2 += `📦 Jami buyurtmalar: *${totalOrders}*\n`;
+    text2 += `⏳ Kutilayotgan: *${pendingOrders}*\n`;
+    text2 += `✅ Yetkazilgan: *${delivered}*\n`;
+    text2 += `💰 Daromad: *${fmt(rev[0]?.total || 0)}*\n`;
+
+    return send(chatId, text2);
+  }
+
+  // ── ℹ️ Bot haqida ─────────────────────────────────────────────────────────
+  if (text === 'ℹ️ Bot haqida') {
+    return send(chatId,
+      '🏗️ *Stroy Market Uzbekistan Bot*\n\n' +
+      'Qurilish materiallari bozori.\n\n' +
+      '📱 Ro\'yxatdan o\'ting va buyurtma bering!\n' +
+      '🏪 Sotuvchilar uchun - do\'kon oching va mahsulot qo\'shing.\n\n' +
+      '📞 Muammo: @stroyuzbekisatn_bot'
+    );
+  }
+
+  // ── 🔍 Qidiruv ────────────────────────────────────────────────────────────
+  if (text === '🔍 Qidiruv') {
+    setSession(chatId, { step: 'search', data: {} });
+    return send(chatId, '🔍 Qidiruv so\'zini kiriting:', { reply_markup: cancelKb() });
+  }
+
+  if (session.step === 'search') {
+    const products = await Product.find({
+      $text: { $search: text },
+      isActive: true,
+      isAvailable: true
+    }).populate('store', 'name').limit(10).lean();
+
+    clearSession(chatId);
+    const user = await getUser(chatId);
+
+    if (!products.length) {
+      return send(chatId, `❌ "*${text}*" bo'yicha natija topilmadi.`, {
+        reply_markup: mainMenu(!!user, user?.role)
+      });
+    }
+
+    let result = `🔍 *"${text}"* bo'yicha natijalar:\n\n`;
+    products.forEach((p, i) => {
+      const price = p.salePrice || p.price;
+      result += `${i + 1}. *${p.name}*\n`;
+      result += `   💰 ${fmt(price)}/${p.unit} | 🏪 ${p.store?.name || ''}\n\n`;
     });
+
+    return send(chatId, result, { reply_markup: mainMenu(!!user, user?.role) });
   }
 
-  // Menu buttons
-  if (text === '🏪 Do\'konlar') {
-    return bot.sendMessage(chatId, '👆 Do\'konlar ro\'yxatini ko\'rish uchun:', {
-      reply_markup: {
-        inline_keyboard: [[{ text: '🏪 Barcha do\'konlarni ko\'rish', callback_data: 'list_stores' }]]
-      }
-    });
-  }
-
-  if (text === '🛒 Mening buyurtmalarim' || text === '📋 Buyurtmalar') {
-    const user = await getUserFromTelegram(chatId);
-    if (!user) return bot.sendMessage(chatId, '⚠️ Avval kiring: /login');
-    return bot.emit('text', { ...msg, text: '/orders' });
-  }
-
-  if (text === '👤 Profilim') {
-    return bot.emit('text', { ...msg, text: '/profile' });
-  }
-
-  if (text === '💳 Obuna') {
-    return bot.emit('text', { ...msg, text: '/subscription' });
-  }
-
-  if (text === '❌ Chiqish') {
-    return bot.emit('text', { ...msg, text: '/logout' });
-  }
-
-  if (text === '🔐 Kirish') {
-    return bot.emit('text', { ...msg, text: '/login' });
-  }
-
-  if (text === '📝 Ro\'yxatdan o\'tish') {
-    return bot.emit('text', { ...msg, text: '/register' });
-  }
-
-  // ─── Login steps ──────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // LOGIN steps
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (session.step === 'login_phone') {
     const phone = text.trim();
     if (!/^\+998[0-9]{9}$/.test(phone)) {
-      return bot.sendMessage(chatId, '❌ Noto\'g\'ri format. +998XXXXXXXXX shaklida kiriting:');
+      return send(chatId, '❌ Format: `+998901234567`');
+    }
+    const user = await User.findOne({ phone });
+    if (!user) {
+      clearSession(chatId);
+      return send(chatId, '❌ Bu telefon raqam topilmadi.\n\nRo\'yxatdan o\'tish: /register', {
+        reply_markup: mainMenu(false)
+      });
     }
     setSession(chatId, { step: 'login_password', data: { phone } });
-    return bot.sendMessage(chatId, '🔒 Parolni kiriting:');
+    return send(chatId, '🔒 Parolni kiriting:');
   }
 
   if (session.step === 'login_password') {
-    const { phone } = session.data;
-    const bcrypt = require('bcryptjs');
+    const user = await User.findOne({ phone: session.data.phone }).select('+password');
+    const ok = user && await user.comparePassword(text);
 
-    const user = await User.findOne({ phone }).select('+password');
-    if (!user) {
-      setSession(chatId, { step: 'main', data: {} });
-      return bot.sendMessage(chatId, '❌ Bu telefon raqam topilmadi.', {
-        reply_markup: mainMenuKeyboard(false)
-      });
-    }
-
-    const isMatch = await user.comparePassword(text);
-    if (!isMatch) {
-      return bot.sendMessage(chatId, '❌ Parol noto\'g\'ri. Qayta urinib ko\'ring:');
+    if (!ok) {
+      return send(chatId, '❌ Parol noto\'g\'ri. Qayta urinib ko\'ring:');
     }
 
     await User.findByIdAndUpdate(user._id, {
       telegramId: String(chatId),
-      telegramUsername: msg.from.username
+      telegramUsername: msg.from.username || null
     });
 
-    setSession(chatId, { step: 'main', data: { userId: user._id } });
-
-    await bot.sendMessage(chatId,
-      `✅ *Muvaffaqiyatli kirdingiz!*\n\nXush kelibsiz, *${user.name}*! 🎉`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: mainMenuKeyboard(true, user.role)
-      }
-    );
-    return;
+    clearSession(chatId);
+    return send(chatId, `✅ *Xush kelibsiz, ${user.name}!* 🎉`, {
+      reply_markup: mainMenu(true, user.role)
+    });
   }
 
-  // ─── Register steps ───────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // REGISTER steps
+  // ──────────────────────────────────────────────────────────────────────────
 
-  if (session.step === 'register_name') {
+  if (session.step === 'reg_name') {
     if (text.length < 2 || text.length > 100) {
-      return bot.sendMessage(chatId, '❌ Ism 2-100 ta harf bo\'lishi kerak:');
+      return send(chatId, '❌ Ism 2-100 ta harf bo\'lishi kerak:');
     }
-    setSession(chatId, { step: 'register_phone', data: { name: text } });
-    return bot.sendMessage(chatId, '📱 Telefon raqamingizni kiriting (+998XXXXXXXXX):');
+    setSession(chatId, { step: 'reg_phone', data: { name: text } });
+    return send(chatId, '📱 Telefon raqam kiriting:\n`+998901234567`');
   }
 
-  if (session.step === 'register_phone') {
+  if (session.step === 'reg_phone') {
     const phone = text.trim();
     if (!/^\+998[0-9]{9}$/.test(phone)) {
-      return bot.sendMessage(chatId, '❌ Noto\'g\'ri format. +998XXXXXXXXX shaklida:');
+      return send(chatId, '❌ Format: `+998901234567`');
     }
     const exists = await User.findOne({ phone });
     if (exists) {
-      setSession(chatId, { step: 'main', data: {} });
-      return bot.sendMessage(chatId, '❌ Bu raqam allaqachon ro\'yxatdan o\'tgan. /login', {
-        reply_markup: mainMenuKeyboard(false)
+      clearSession(chatId);
+      return send(chatId, '❌ Bu raqam allaqachon ro\'yxatdan o\'tgan.\n\n/login', {
+        reply_markup: mainMenu(false)
       });
     }
-    setSession(chatId, { step: 'register_password', data: { ...session.data, phone } });
-    return bot.sendMessage(chatId, '🔒 Parol o\'rnating (kamida 6 ta belgi):');
+    setSession(chatId, { step: 'reg_password', data: { ...session.data, phone } });
+    return send(chatId, '🔒 Parol o\'rnating (kamida 6 ta belgi):\n_Masalan: Parol@123_');
   }
 
-  if (session.step === 'register_password') {
+  if (session.step === 'reg_password') {
     if (text.length < 6) {
-      return bot.sendMessage(chatId, '❌ Parol kamida 6 ta belgi bo\'lishi kerak:');
+      return send(chatId, '❌ Parol kamida 6 ta belgi bo\'lishi kerak:');
     }
 
     const { name, phone } = session.data;
 
-    const user = await User.create({
-      name,
-      phone,
-      password: text,
-      role: 'client',
-      telegramId: String(chatId),
-      telegramUsername: msg.from.username
-    });
+    try {
+      const user = await User.create({
+        name,
+        phone,
+        password: text,
+        role: 'client',
+        telegramId: String(chatId),
+        telegramUsername: msg.from.username || null
+      });
 
-    setSession(chatId, { step: 'main', data: { userId: user._id } });
-
-    await bot.sendMessage(chatId,
-      `🎉 *Ro'yxatdan o'tdingiz!*\n\nXush kelibsiz, *${user.name}*!\n\nEndi buyurtma bera olasiz.`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: mainMenuKeyboard(true, user.role)
-      }
-    );
-    return;
+      clearSession(chatId);
+      return send(chatId,
+        `🎉 *Muvaffaqiyatli ro'yxatdan o'tdingiz!*\n\nXush kelibsiz, *${user.name}*!`,
+        { reply_markup: mainMenu(true, user.role) }
+      );
+    } catch (err) {
+      clearSession(chatId);
+      return send(chatId, `❌ Xatolik: ${err.message}`, { reply_markup: mainMenu(false) });
+    }
   }
 });
 
@@ -507,29 +518,13 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
+  await bot.answerCallbackQuery(query.id).catch(() => {});
 
-  await bot.answerCallbackQuery(query.id);
-
-  if (data === 'list_stores') {
-    const stores = await Store.find({ isActive: true })
-      .sort('-rating')
-      .limit(10)
-      .lean();
-
-    const buttons = stores.map((s) => ([{
-      text: `${s.isVerified ? '✅ ' : ''}${s.name} (⭐${s.rating.toFixed(1)})`,
-      callback_data: `store_${s._id}`
-    }]));
-
-    await bot.sendMessage(chatId, '🏪 Do\'konlar ro\'yxati:', {
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-
+  // ── Store detail ───────────────────────────────────────────────────────────
   if (data.startsWith('store_')) {
-    const storeId = data.replace('store_', '');
-    const store = await Store.findById(storeId).populate('category', 'name').lean();
-    if (!store) return bot.sendMessage(chatId, '❌ Do\'kon topilmadi');
+    const storeId = data.slice(6);
+    const store = await Store.findById(storeId).lean();
+    if (!store) return send(chatId, '❌ Do\'kon topilmadi');
 
     const productCount = await Product.countDocuments({ store: storeId, isActive: true });
 
@@ -537,172 +532,105 @@ bot.on('callback_query', async (query) => {
     if (store.description) text += `📝 ${store.description}\n\n`;
     text += `⭐ Reyting: ${store.rating.toFixed(1)}/5\n`;
     text += `📦 Mahsulotlar: ${productCount} ta\n`;
-    if (store.phone) text += `📞 Tel: ${store.phone}\n`;
-    if (store.address?.fullAddress) text += `📍 ${store.address.fullAddress}\n`;
     text += `🏆 Obuna: ${store.subscriptionPlan.toUpperCase()}\n`;
-    if (store.deliveryAvailable) text += `🚚 Yetkazib berish: ${formatCurrency(store.deliveryFee)}\n`;
+    if (store.isVerified) text += `✅ Tasdiqlangan\n`;
+    if (store.phone) text += `📞 ${store.phone}\n`;
+    if (store.address?.fullAddress) text += `📍 ${store.address.fullAddress}\n`;
+    if (store.deliveryAvailable) text += `🚚 Yetkazish: ${fmt(store.deliveryFee)}\n`;
 
     await bot.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: [[
-          { text: '📦 Mahsulotlarni ko\'rish', callback_data: `products_${storeId}` }
-        ]]
+        inline_keyboard: [
+          [{ text: '📦 Mahsulotlar', callback_data: `prods_${storeId}_0` }],
+          [{ text: '⬅️ Orqaga', callback_data: 'back_stores' }]
+        ]
       }
     });
   }
 
-  if (data.startsWith('products_')) {
-    const storeId = data.replace('products_', '');
+  // ── Products list ──────────────────────────────────────────────────────────
+  if (data.startsWith('prods_')) {
+    const [, storeId, pageStr] = data.split('_');
+    const page = parseInt(pageStr) || 0;
+    const limit = 5;
+
     const products = await Product.find({ store: storeId, isActive: true, isAvailable: true })
-      .limit(10)
-      .lean();
+      .skip(page * limit).limit(limit + 1).lean();
 
-    if (products.length === 0) {
-      return bot.sendMessage(chatId, '📭 Mahsulotlar mavjud emas');
-    }
+    const hasMore = products.length > limit;
+    const shown = products.slice(0, limit);
 
-    let text = '📦 *Mahsulotlar:*\n\n';
-    products.forEach((p, i) => {
+    if (!shown.length) return send(chatId, '📭 Mahsulotlar topilmadi.');
+
+    let text = `📦 *Mahsulotlar (${page * limit + 1}-${page * limit + shown.length}):*\n\n`;
+    shown.forEach((p, i) => {
       const price = p.salePrice || p.price;
       text += `${i + 1}. *${p.name}*\n`;
-      text += `   💰 ${formatCurrency(price)}/${p.unit}\n`;
-      if (p.quantity > 0) text += `   📊 Mavjud: ${p.quantity} ${p.unit}\n`;
-      text += '\n';
+      text += `   💰 ${fmt(price)}/${p.unit}`;
+      if (p.salePrice) text += ` ~~${fmt(p.price)}~~`;
+      text += `\n   📊 ${p.quantity} ${p.unit} mavjud\n\n`;
     });
 
-    await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    const navBtns = [];
+    if (page > 0) navBtns.push({ text: '◀️', callback_data: `prods_${storeId}_${page - 1}` });
+    if (hasMore) navBtns.push({ text: '▶️', callback_data: `prods_${storeId}_${page + 1}` });
+
+    const kb = [[{ text: '⬅️ Do\'kon', callback_data: `store_${storeId}` }]];
+    if (navBtns.length) kb.unshift(navBtns);
+
+    await bot.sendMessage(chatId, text, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: kb }
+    });
+  }
+
+  // ── Back to stores ─────────────────────────────────────────────────────────
+  if (data === 'back_stores') {
+    const stores = await Store.find({ isActive: true })
+      .sort({ isFeatured: -1, rating: -1 }).limit(10).lean();
+
+    const buttons = stores.map((s) => ([{
+      text: `${s.isVerified ? '✅ ' : ''}${s.name} ⭐${s.rating.toFixed(1)}`,
+      callback_data: `store_${s._id}`
+    }]));
+
+    await bot.editMessageText('🏪 *Do\'konlar:*', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    }).catch(() => send(chatId, '🏪 Do\'konlar:', {
+      reply_markup: { inline_keyboard: buttons }
+    }));
   }
 });
 
-// ─── Notification functions ───────────────────────────────────────────────────
+// ─── Error handlers ───────────────────────────────────────────────────────────
 
-const ADMIN_CHAT_IDS = process.env.ADMIN_TELEGRAM_IDS
-  ? process.env.ADMIN_TELEGRAM_IDS.split(',').map((id) => id.trim())
-  : [];
-
-const notifyNewOrder = async (order) => {
-  try {
-    // Notify seller
-    if (order.store?.owner) {
-      const seller = await User.findById(order.store.owner);
-      if (seller?.telegramId) {
-        const itemsList = order.items.map((i) => `• ${i.name} x${i.quantity}`).join('\n');
-        const text = `
-🔔 *Yangi buyurtma!*
-
-📋 *${order.orderNumber}*
-💰 Jami: *${formatCurrency(order.totalPrice)}*
-📦 Mahsulotlar:
-${itemsList}
-📍 Manzil: ${order.deliveryAddress?.fullAddress || 'Ko\'rsatilmagan'}
-📱 Mijoz: ${order.deliveryAddress?.recipientPhone || ''}
-
-Buyurtmani tasdiqlash uchun dasturga kiring.
-        `.trim();
-
-        await bot.sendMessage(seller.telegramId, text, { parse_mode: 'Markdown' });
-      }
-    }
-
-    // Notify admins
-    for (const adminChatId of ADMIN_CHAT_IDS) {
-      try {
-        await bot.sendMessage(adminChatId, `🔔 Yangi buyurtma: *${order.orderNumber}* — ${formatCurrency(order.totalPrice)}`, {
-          parse_mode: 'Markdown'
-        });
-      } catch {
-        // ignore if admin chat not available
-      }
-    }
-  } catch (error) {
-    logger.warn('notifyNewOrder error:', error.message);
-  }
-};
-
-const notifyOrderStatusChange = async (order, newStatus) => {
-  try {
-    const buyer = await User.findById(order.buyer);
-    if (!buyer?.telegramId) return;
-
-    const text = `
-${statusEmoji[newStatus]} *Buyurtma holati o'zgardi*
-
-📋 *${order.orderNumber}*
-📌 Yangi holat: *${statusText[newStatus]}*
-${newStatus === 'delivering' ? '🚚 Buyurtmangiz yetkazilmoqda!' : ''}
-${newStatus === 'delivered' ? '✅ Buyurtmangiz yetkazildi! Mahsulotni baholang.' : ''}
-${newStatus === 'cancelled' ? '❌ Buyurtma bekor qilindi.' : ''}
-    `.trim();
-
-    await bot.sendMessage(buyer.telegramId, text, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.warn('notifyOrderStatusChange error:', error.message);
-  }
-};
-
-const notifySubscriptionPurchase = async (user, subscription) => {
-  try {
-    const dbUser = await User.findById(user._id || user);
-    if (!dbUser?.telegramId) return;
-
-    const text = `
-💳 *Obuna sotib olindi!*
-
-🎉 *${subscription.displayName || subscription.name}* obunangiz faollashtirildi.
-
-📦 ${subscription.maxProducts >= 999999 ? 'Cheksiz' : subscription.maxProducts} mahsulot
-🚗 ${subscription.maxVehicles >= 999999 ? 'Cheksiz' : subscription.maxVehicles} avtomobil
-⏰ 30 kun davomida
-
-Xarid uchun rahmat!
-    `.trim();
-
-    await bot.sendMessage(dbUser.telegramId, text, { parse_mode: 'Markdown' });
-  } catch (error) {
-    logger.warn('notifySubscriptionPurchase error:', error.message);
-  }
-};
-
-const sendMessageToUser = async (userId, message) => {
-  try {
-    const user = await User.findById(userId);
-    if (user?.telegramId) {
-      await bot.sendMessage(user.telegramId, message, { parse_mode: 'Markdown' });
-    }
-  } catch (error) {
-    logger.warn('sendMessageToUser error:', error.message);
-  }
-};
-
-// ─── Error handling ───────────────────────────────────────────────────────────
-
-bot.on('polling_error', (error) => {
-  if (error.code !== 'ETELEGRAM') {
-    logger.error('Bot polling error:', error.message);
+bot.on('polling_error', (err) => {
+  if (err.code === 'EFATAL') {
+    logger.error('Bot polling FATAL:', err.message);
+  } else if (!err.message?.includes('ETELEGRAM')) {
+    logger.warn('Bot polling error:', err.message);
   }
 });
 
-bot.on('error', (error) => {
-  logger.error('Bot error:', error.message);
+bot.on('error', (err) => {
+  logger.error('Bot error:', err.message);
 });
 
-logger.info(`🤖 Telegram bot @${process.env.TELEGRAM_BOT_USERNAME} ishga tushdi`);
+logger.info(`🤖 Telegram bot @${process.env.TELEGRAM_BOT_USERNAME || 'stroyuzbekisatn_bot'} ishga tushdi`);
 
-// Export functions for use in controllers
-module.exports = {
-  bot,
-  notifyNewOrder,
-  notifyOrderStatusChange,
-  notifySubscriptionPurchase,
-  sendMessageToUser
-};
-
-// If this file is run directly, start with DB connection
+// DB connection when run directly
 if (require.main === module) {
-  connectDB().then(() => {
-    logger.info('✅ Bot va DB tayyor');
-  }).catch((err) => {
-    logger.error('DB connection failed:', err);
-  });
+  connectDB()
+    .then(() => logger.info('✅ Bot + MongoDB tayyor'))
+    .catch((err) => {
+      logger.error('MongoDB xatolik:', err.message);
+      process.exit(1);
+    });
 }
+
+// Export notification functions (delegates to notifier.js - no polling conflict)
+module.exports = notifier;

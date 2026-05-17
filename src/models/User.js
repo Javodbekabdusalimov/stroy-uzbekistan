@@ -58,7 +58,6 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    sparse: true,
     lowercase: true,
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Email noto\'g\'ri formatda']
@@ -98,8 +97,7 @@ const userSchema = new mongoose.Schema({
     default: false
   },
   telegramId: {
-    type: String,
-    sparse: true
+    type: String
   },
   telegramUsername: String,
   currentSubscription: {
@@ -156,9 +154,10 @@ userSchema.methods.incrementLoginAttempts = async function () {
   return this.updateOne(updates);
 };
 
-userSchema.index({ phone: 1 });
-userSchema.index({ email: 1 });
+// phone, email, telegramId unique indexes are created via schema.index() below (sparse for optional)
+userSchema.index({ phone: 1 }, { unique: true });
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
 userSchema.index({ role: 1 });
-userSchema.index({ telegramId: 1 });
+userSchema.index({ telegramId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

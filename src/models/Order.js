@@ -161,7 +161,7 @@ orderSchema.index({ buyer: 1, createdAt: -1 });
 orderSchema.index({ store: 1, createdAt: -1 });
 orderSchema.index({ driver: 1, status: 1 });
 orderSchema.index({ status: 1 });
-orderSchema.index({ orderNumber: 1 });
+// orderNumber unique: true already creates an index
 orderSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('Order', orderSchema);

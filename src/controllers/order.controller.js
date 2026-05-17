@@ -81,7 +81,7 @@ exports.createOrder = async (req, res) => {
 
     // Notify via Telegram
     try {
-      const bot = require('../telegram/bot');
+      const bot = require('../telegram/notifier');
       if (bot && typeof bot.notifyNewOrder === 'function') {
         await bot.notifyNewOrder(populated);
       }
@@ -251,7 +251,7 @@ exports.updateOrderStatus = async (req, res) => {
 
     // Telegram notification
     try {
-      const bot = require('../telegram/bot');
+      const bot = require('../telegram/notifier');
       if (bot && typeof bot.notifyOrderStatusChange === 'function') {
         await bot.notifyOrderStatusChange(order, status);
       }

@@ -96,8 +96,8 @@ deliverySchema.pre('save', function (next) {
   next();
 });
 
-deliverySchema.index({ order: 1 });
+// order unique: true already creates an index
 deliverySchema.index({ driver: 1, status: 1 });
-deliverySchema.index({ trackingCode: 1 });
+// trackingCode unique: true already creates an index
 
 module.exports = mongoose.model('Delivery', deliverySchema);

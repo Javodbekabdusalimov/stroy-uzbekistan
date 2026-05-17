@@ -62,7 +62,7 @@ exports.purchaseSubscription = async (req, res) => {
 
     // Telegram notification
     try {
-      const bot = require('../telegram/bot');
+      const bot = require('../telegram/notifier');
       if (bot && typeof bot.notifySubscriptionPurchase === 'function') {
         await bot.notifySubscriptionPurchase(req.user, subscription);
       }

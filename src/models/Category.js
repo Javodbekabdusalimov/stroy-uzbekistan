@@ -75,6 +75,6 @@ categorySchema.pre('save', function (next) {
 });
 
 categorySchema.index({ parent: 1 });
-categorySchema.index({ slug: 1 });
+// slug unique: true already creates an index
 
 module.exports = mongoose.model('Category', categorySchema);
