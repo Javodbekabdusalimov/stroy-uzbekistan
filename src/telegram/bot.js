@@ -33,29 +33,27 @@ const esc = (t) => String(t ?? '')
   .replace(/>/g, '&gt;');
 
 const b = (t) => `<b>${esc(t)}</b>`;
-const i = (t) => `<i>${esc(t)}</i>`;
 const code = (t) => `<code>${esc(t)}</code>`;
 const link = (text, url) => `<a href="${url}">${esc(text)}</a>`;
-
 const fmt = (n) => new Intl.NumberFormat('uz-UZ').format(n ?? 0) + ' UZS';
 
 const send = (chatId, html, opts = {}) =>
   bot.sendMessage(chatId, html, { parse_mode: 'HTML', ...opts });
 
-// ─── Keyboards ─────────────────────────────────────────────────────────────────
+// ─── Keyboards ────────────────────────────────────────────────────────────────
 const mainMenu = (loggedIn = false, role = 'client') => {
   const rows = [];
   if (!loggedIn) {
-    rows.push([{ text: '🔐 Kirish' }, { text: '📝 Ro\'yxatdan o\'tish' }]);
+    rows.push([{ text: '🔐 Kirish' }, { text: "📝 Ro'yxatdan o'tish" }]);
     rows.push([{ text: 'ℹ️ Bot haqida' }]);
   } else {
     if (role === 'client') {
-      rows.push([{ text: '🏪 Do\'konlar' }, { text: '🔍 Qidiruv' }]);
+      rows.push([{ text: "🏪 Do'konlar" }, { text: '🔍 Qidiruv' }]);
       rows.push([{ text: '🛒 Buyurtmalarim' }]);
       rows.push([{ text: '👤 Profilim' }]);
     }
     if (role === 'seller') {
-      rows.push([{ text: '🏬 Mening do\'konim' }, { text: '📋 Buyurtmalar' }]);
+      rows.push([{ text: "🏬 Mening do'konim" }, { text: '📋 Buyurtmalar' }]);
       rows.push([{ text: '💳 Obuna' }, { text: '📊 Statistika' }]);
       rows.push([{ text: '👤 Profilim' }]);
     }
@@ -64,7 +62,7 @@ const mainMenu = (loggedIn = false, role = 'client') => {
       rows.push([{ text: '👤 Profilim' }]);
     }
     if (role === 'admin') {
-      rows.push([{ text: '🏪 Do\'konlar' }, { text: '📋 Buyurtmalar' }]);
+      rows.push([{ text: "🏪 Do'konlar" }, { text: '📋 Buyurtmalar' }]);
       rows.push([{ text: '📊 Dashboard' }, { text: '👤 Profilim' }]);
     }
     rows.push([{ text: '❌ Chiqish' }]);
@@ -79,42 +77,20 @@ const cancelKb = () => ({
 const getUser = (chatId) =>
   User.findOne({ telegramId: String(chatId), isActive: true });
 
-// ─── /start ───────────────────────────────────────────────────────────────────
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
+// ─── Standalone command handlers ──────────────────────────────────────────────
+
+async function cmdStart(chatId, fromMsg) {
   clearSession(chatId);
   const user = await getUser(chatId);
-
   const text = user
     ? `👋 Xush kelibsiz qaytib, ${b(user.name)}!`
     : `🏗️ ${b('Stroy Market Uzbekistan')}\n\nQurilish materiallari bozorida xush kelibsiz!\n\n` +
       `🏪 Do'konlar | 📦 Mahsulotlar | 🛒 Buyurtma | 🚚 Yetkazish\n\n` +
-      `Davom etish uchun ${b('Kirish')} yoki ${b('Ro\'yxatdan o\'tish')} tugmasini bosing.`;
-
+      `Davom etish uchun ${b('Kirish')} yoki ${b("Ro'yxatdan o'tish")} tugmasini bosing.`;
   await send(chatId, text, { reply_markup: mainMenu(!!user, user?.role) });
-});
+}
 
-// ─── /help ────────────────────────────────────────────────────────────────────
-bot.onText(/\/help/, async (msg) => {
-  await send(msg.chat.id,
-    `📖 ${b('Buyruqlar:')}\n\n` +
-    `/start — Bosh menyu\n` +
-    `/login — Kirish\n` +
-    `/register — Royxatdan otish\n` +
-    `/orders — Buyurtmalarim\n` +
-    `/stores — Dokonlar royxati\n` +
-    `/subscription — Obuna rejalari\n` +
-    `/track KOD — Buyurtma kuzatuvi\n` +
-    `/profile — Profilim\n` +
-    `/logout — Chiqish\n` +
-    `/help — Yordam\n\n` +
-    `📞 Muammo bolsa: @stroyuzbekisatn_bot`
-  );
-});
-
-// ─── /login ───────────────────────────────────────────────────────────────────
-bot.onText(/\/login/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdLogin(chatId) {
   const existing = await getUser(chatId);
   if (existing) {
     return send(chatId, `✅ Siz allaqachon kirgansiz, ${b(existing.name)}`, {
@@ -125,25 +101,27 @@ bot.onText(/\/login/, async (msg) => {
   await send(chatId, `📱 Telefon raqamingizni kiriting:\n${code('+998901234567')}`, {
     reply_markup: cancelKb()
   });
-});
+}
 
-// ─── /register ───────────────────────────────────────────────────────────────
-bot.onText(/\/register/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdRegister(chatId) {
   setSession(chatId, { step: 'reg_name', data: {} });
-  await send(chatId, `✍️ ${b('Royxatdan otish')}\n\nIsmingizni kiriting:`, {
+  await send(chatId, `✍️ ${b("Ro'yxatdan o'tish")}\n\nIsmingizni kiriting:`, {
     reply_markup: cancelKb()
   });
-});
+}
 
-// ─── /orders ─────────────────────────────────────────────────────────────────
-bot.onText(/\/orders/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdOrders(chatId) {
   const user = await getUser(chatId);
   if (!user) return send(chatId, '⚠️ Avval kiring: /login');
 
   const filter = user.role === 'client' ? { buyer: user._id }
-    : user.role === 'driver' ? { driver: user._id } : {};
+    : user.role === 'driver' ? { driver: user._id }
+    : user.role === 'seller' ? {} : {};
+
+  if (user.role === 'seller') {
+    const store = await Store.findOne({ owner: user._id }).lean();
+    if (store) filter.store = store._id;
+  }
 
   const orders = await Order.find(filter)
     .populate('store', 'name')
@@ -166,50 +144,9 @@ bot.onText(/\/orders/, async (msg) => {
   });
 
   await send(chatId, text);
-});
+}
 
-// ─── /track ──────────────────────────────────────────────────────────────────
-bot.onText(/\/track (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const trackCode = match[1].trim().toUpperCase();
-
-  const delivery = await Delivery.findOne({ trackingCode: trackCode })
-    .populate('driver', 'name phone')
-    .populate('vehicle', 'name plateNumber')
-    .populate('order', 'orderNumber status deliveryAddress').lean();
-
-  if (!delivery) {
-    return send(chatId, `❌ ${code(trackCode)} kodi bilan yetkazma topilmadi.`);
-  }
-
-  const statusMap = {
-    assigned: '📌 Tayinlandi', picked_up: '📦 Olindi',
-    in_transit: '🚚 Yolda', delivered: '✅ Yetkazildi', failed: '❌ Muvaffaqiyatsiz'
-  };
-
-  let text = `📦 ${b('Buyurtma kuzatuvi')}\n\n`;
-  text += `🔖 Kod: ${code(trackCode)}\n`;
-  text += `📌 Holat: ${statusMap[delivery.status] || delivery.status}\n`;
-  if (delivery.driver) {
-    text += `👤 Haydovchi: ${esc(delivery.driver.name)} (${esc(delivery.driver.phone)})\n`;
-  }
-  if (delivery.vehicle) {
-    text += `🚗 Avtomobil: ${esc(delivery.vehicle.name)} | ${esc(delivery.vehicle.plateNumber)}\n`;
-  }
-  if (delivery.currentLocation) {
-    const { latitude, longitude } = delivery.currentLocation;
-    text += `📍 ${link('Xaritada korish', `https://maps.google.com/?q=${latitude},${longitude}`)}\n`;
-  }
-  if (delivery.order?.deliveryAddress?.fullAddress) {
-    text += `🏠 Manzil: ${esc(delivery.order.deliveryAddress.fullAddress)}\n`;
-  }
-
-  await send(chatId, text);
-});
-
-// ─── /stores ─────────────────────────────────────────────────────────────────
-bot.onText(/\/stores/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdStores(chatId) {
   const stores = await Store.find({ isActive: true })
     .sort({ isFeatured: -1, rating: -1 }).limit(10).lean();
 
@@ -224,11 +161,9 @@ bot.onText(/\/stores/, async (msg) => {
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard: buttons }
   });
-});
+}
 
-// ─── /subscription ───────────────────────────────────────────────────────────
-bot.onText(/\/subscription/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdSubscription(chatId) {
   const plans = await Subscription.find({ isActive: true }).sort('order').lean();
 
   let text = `💳 ${b('Obuna rejalari:')}\n\n`;
@@ -244,11 +179,9 @@ bot.onText(/\/subscription/, async (msg) => {
   });
 
   await send(chatId, text);
-});
+}
 
-// ─── /profile ────────────────────────────────────────────────────────────────
-bot.onText(/\/profile/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdProfile(chatId) {
   const user = await getUser(chatId);
   if (!user) return send(chatId, '⚠️ Avval kiring: /login');
 
@@ -259,23 +192,168 @@ bot.onText(/\/profile/, async (msg) => {
   text += `📱 Tel: ${b(esc(user.phone))}\n`;
   if (user.email) text += `📧 Email: ${b(esc(user.email))}\n`;
   text += `🎭 Rol: ${b(roleLabel[user.role] || user.role)}\n`;
-  text += `📅 Azo bolgan: ${b(new Date(user.createdAt).toLocaleDateString('uz-UZ'))}\n`;
+  text += `📅 A'zo bo'lgan: ${b(new Date(user.createdAt).toLocaleDateString('uz-UZ'))}\n`;
 
   await send(chatId, text);
-});
+}
 
-// ─── /logout ─────────────────────────────────────────────────────────────────
-bot.onText(/\/logout/, async (msg) => {
-  const chatId = msg.chat.id;
+async function cmdLogout(chatId) {
   await User.findOneAndUpdate(
     { telegramId: String(chatId) },
     { $unset: { telegramId: 1, telegramUsername: 1 } }
   );
   clearSession(chatId);
   await send(chatId, '👋 Tizimdan chiqdingiz.', { reply_markup: mainMenu(false) });
+}
+
+async function cmdMyStore(chatId) {
+  const user = await getUser(chatId);
+  if (!user) return send(chatId, '⚠️ Avval kiring: /login');
+
+  const store = await Store.findOne({ owner: user._id }).lean();
+  if (!store) {
+    return send(chatId, "📭 Sizda do'kon yoq. API orqali yarating:\nPOST /api/v1/stores");
+  }
+
+  const productCount = await Product.countDocuments({ store: store._id, isActive: true });
+
+  let info = `🏬 ${b(esc(store.name))}\n\n`;
+  info += `📦 Mahsulotlar: ${b(`${productCount} / ${store.maxProducts >= 999999 ? '∞' : store.maxProducts}`)}\n`;
+  info += `🚗 Avtomobil limiti: ${b(store.maxVehicles >= 999999 ? '∞' : String(store.maxVehicles))}\n`;
+  info += `⭐ Reyting: ${b(`${store.rating.toFixed(1)}/5`)}\n`;
+  info += `🏆 Obuna: ${b(store.subscriptionPlan.toUpperCase())}\n`;
+  info += store.isVerified ? '✅ Tasdiqlangan\n' : '⏳ Tasdiqlanmagan\n';
+  if (store.phone) info += `📞 Tel: ${esc(store.phone)}\n`;
+
+  await send(chatId, info);
+}
+
+async function cmdStats(chatId) {
+  const user = await getUser(chatId);
+  if (!user) return send(chatId, '⚠️ Avval kiring: /login');
+
+  const store = await Store.findOne({ owner: user._id });
+  if (!store) return send(chatId, "📭 Do'kon topilmadi.");
+
+  const [total, pending, delivered] = await Promise.all([
+    Order.countDocuments({ store: store._id }),
+    Order.countDocuments({ store: store._id, status: 'pending' }),
+    Order.countDocuments({ store: store._id, status: 'delivered' })
+  ]);
+  const rev = await Order.aggregate([
+    { $match: { store: store._id, status: 'delivered', paymentStatus: 'paid' } },
+    { $group: { _id: null, total: { $sum: '$totalPrice' } } }
+  ]);
+
+  let txt = `📊 ${b(esc(store.name) + ' statistikasi')}\n\n`;
+  txt += `📦 Jami buyurtmalar: ${b(String(total))}\n`;
+  txt += `⏳ Kutilayotgan: ${b(String(pending))}\n`;
+  txt += `✅ Yetkazilgan: ${b(String(delivered))}\n`;
+  txt += `💰 Daromad: ${b(esc(fmt(rev[0]?.total || 0)))}\n`;
+
+  await send(chatId, txt);
+}
+
+async function cmdHelp(chatId) {
+  await send(chatId,
+    `📖 ${b('Buyruqlar:')}\n\n` +
+    `/start — Bosh menyu\n` +
+    `/login — Kirish\n` +
+    `/register — Ro'yxatdan o'tish\n` +
+    `/orders — Buyurtmalarim\n` +
+    `/stores — Do'konlar ro'yxati\n` +
+    `/subscription — Obuna rejalari\n` +
+    `/track KOD — Buyurtma kuzatuvi\n` +
+    `/profile — Profilim\n` +
+    `/logout — Chiqish\n` +
+    `/help — Yordam\n\n` +
+    `📞 Muammo bo'lsa: @Java_411`
+  );
+}
+
+async function cmdAbout(chatId) {
+  await send(chatId,
+    `🏗️ ${b('Stroy Market Uzbekistan')}\n\n` +
+    `Qurilish materiallari bozori.\n\n` +
+    `📱 Ro'yxatdan o'ting va buyurtma bering!\n` +
+    `🏪 Sotuvchilar uchun - do'kon oching.\n\n` +
+    `📞 Muammo: @stroyuzbekisatn_bot`
+  );
+}
+
+async function cmdSearch(chatId) {
+  setSession(chatId, { step: 'search', data: {} });
+  await send(chatId, '🔍 Qidiruv so\'zini kiriting:', { reply_markup: cancelKb() });
+}
+
+// ─── onText handlers — each calls its standalone function ─────────────────────
+bot.onText(/\/start/, (msg) => cmdStart(msg.chat.id, msg));
+bot.onText(/\/help/, (msg) => cmdHelp(msg.chat.id));
+bot.onText(/\/login/, (msg) => cmdLogin(msg.chat.id));
+bot.onText(/\/register/, (msg) => cmdRegister(msg.chat.id));
+bot.onText(/\/orders/, (msg) => cmdOrders(msg.chat.id));
+bot.onText(/\/stores/, (msg) => cmdStores(msg.chat.id));
+bot.onText(/\/subscription/, (msg) => cmdSubscription(msg.chat.id));
+bot.onText(/\/profile/, (msg) => cmdProfile(msg.chat.id));
+bot.onText(/\/logout/, (msg) => cmdLogout(msg.chat.id));
+
+bot.onText(/\/track (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const trackCode = match[1].trim().toUpperCase();
+
+  const delivery = await Delivery.findOne({ trackingCode: trackCode })
+    .populate('driver', 'name phone')
+    .populate('vehicle', 'name plateNumber')
+    .populate('order', 'orderNumber status deliveryAddress').lean();
+
+  if (!delivery) {
+    return send(chatId, `❌ ${code(trackCode)} kodi bilan yetkazma topilmadi.`);
+  }
+
+  const statusMap = {
+    assigned: '📌 Tayinlandi', picked_up: '📦 Olindi',
+    in_transit: '🚚 Yo\'lda', delivered: '✅ Yetkazildi', failed: '❌ Muvaffaqiyatsiz'
+  };
+
+  let text = `📦 ${b('Buyurtma kuzatuvi')}\n\n`;
+  text += `🔖 Kod: ${code(trackCode)}\n`;
+  text += `📌 Holat: ${statusMap[delivery.status] || delivery.status}\n`;
+  if (delivery.driver) {
+    text += `👤 Haydovchi: ${esc(delivery.driver.name)} (${esc(delivery.driver.phone)})\n`;
+  }
+  if (delivery.vehicle) {
+    text += `🚗 Avtomobil: ${esc(delivery.vehicle.name)} | ${esc(delivery.vehicle.plateNumber)}\n`;
+  }
+  if (delivery.currentLocation) {
+    const { latitude, longitude } = delivery.currentLocation;
+    text += `📍 ${link('Xaritada ko\'rish', `https://maps.google.com/?q=${latitude},${longitude}`)}\n`;
+  }
+  if (delivery.order?.deliveryAddress?.fullAddress) {
+    text += `🏠 Manzil: ${esc(delivery.order.deliveryAddress.fullAddress)}\n`;
+  }
+
+  await send(chatId, text);
 });
 
-// ─── Message handler ──────────────────────────────────────────────────────────
+// ─── Button map: keyboard button text → handler function ─────────────────────
+const btnMap = {
+  '🔐 Kirish':              (id) => cmdLogin(id),
+  "📝 Ro'yxatdan o'tish":  (id) => cmdRegister(id),
+  "🏪 Do'konlar":          (id) => cmdStores(id),
+  '🛒 Buyurtmalarim':      (id) => cmdOrders(id),
+  '📋 Buyurtmalar':        (id) => cmdOrders(id),
+  '🚚 Yetkazmalarim':      (id) => cmdOrders(id),
+  '👤 Profilim':           (id) => cmdProfile(id),
+  '💳 Obuna':              (id) => cmdSubscription(id),
+  '📊 Statistika':         (id) => cmdStats(id),
+  '📊 Dashboard':          (id) => cmdStats(id),
+  "🏬 Mening do'konim":    (id) => cmdMyStore(id),
+  '🔍 Qidiruv':            (id) => cmdSearch(id),
+  'ℹ️ Bot haqida':         (id) => cmdAbout(id),
+  '❌ Chiqish':            (id) => cmdLogout(id),
+};
+
+// ─── Main message handler ─────────────────────────────────────────────────────
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -283,97 +361,19 @@ bot.on('message', async (msg) => {
 
   const session = getSession(chatId);
 
-  // Cancel / Back
+  // Back / Cancel
   if (text === '⬅️ Orqaga') {
     clearSession(chatId);
     const user = await getUser(chatId);
     return send(chatId, '🏠 Bosh menyu', { reply_markup: mainMenu(!!user, user?.role) });
   }
 
-  // Menu shortcuts
-  const shortcuts = {
-    '🔐 Kirish': '/login',
-    "📝 Ro'yxatdan o'tish": '/register',
-    "🏪 Do'konlar": '/stores',
-    '🛒 Buyurtmalarim': '/orders',
-    '📋 Buyurtmalar': '/orders',
-    '🚚 Yetkazmalarim': '/orders',
-    '👤 Profilim': '/profile',
-    '💳 Obuna': '/subscription',
-    '❌ Chiqish': '/logout',
-  };
-
-  if (shortcuts[text]) {
-    return bot.emit('text', { ...msg, text: shortcuts[text] });
+  // Keyboard button → direct function call (no bot.emit)
+  if (btnMap[text]) {
+    return btnMap[text](chatId);
   }
 
-  // ── ℹ️ Bot haqida ─────────────────────────────────────────────────────────
-  if (text === 'ℹ️ Bot haqida') {
-    return send(chatId,
-      `🏗️ ${b('Stroy Market Uzbekistan')}\n\n` +
-      `Qurilish materiallari bozori.\n\n` +
-      `📱 Royxatdan oting va buyurtma bering!\n` +
-      `🏪 Sotuvchilar uchun - dokon oching.\n\n` +
-      `📞 Muammo: @stroyuzbekisatn_bot`
-    );
-  }
-
-  // ── 🏬 Mening do'konim ────────────────────────────────────────────────────
-  if (text === "🏬 Mening do'konim") {
-    const user = await getUser(chatId);
-    if (!user) return send(chatId, '⚠️ Avval kiring: /login');
-
-    const store = await Store.findOne({ owner: user._id }).lean();
-    if (!store) {
-      return send(chatId, "📭 Sizda dokon yoq. API orqali yarating:\nPOST /api/v1/stores");
-    }
-
-    const productCount = await Product.countDocuments({ store: store._id, isActive: true });
-
-    let info = `🏬 ${b(esc(store.name))}\n\n`;
-    info += `📦 Mahsulotlar: ${b(`${productCount} / ${store.maxProducts >= 999999 ? '∞' : store.maxProducts}`)}\n`;
-    info += `🚗 Avtomobil limiti: ${b(store.maxVehicles >= 999999 ? '∞' : String(store.maxVehicles))}\n`;
-    info += `⭐ Reyting: ${b(`${store.rating.toFixed(1)}/5`)}\n`;
-    info += `🏆 Obuna: ${b(store.subscriptionPlan.toUpperCase())}\n`;
-    info += store.isVerified ? '✅ Tasdiqlangan\n' : '⏳ Tasdiqlanmagan\n';
-    if (store.phone) info += `📞 Tel: ${esc(store.phone)}\n`;
-
-    return send(chatId, info);
-  }
-
-  // ── 📊 Statistika ─────────────────────────────────────────────────────────
-  if (text === '📊 Statistika') {
-    const user = await getUser(chatId);
-    if (!user) return send(chatId, '⚠️ Avval kiring: /login');
-
-    const store = await Store.findOne({ owner: user._id });
-    if (!store) return send(chatId, "📭 Dokon topilmadi.");
-
-    const [total, pending, delivered] = await Promise.all([
-      Order.countDocuments({ store: store._id }),
-      Order.countDocuments({ store: store._id, status: 'pending' }),
-      Order.countDocuments({ store: store._id, status: 'delivered' })
-    ]);
-    const rev = await Order.aggregate([
-      { $match: { store: store._id, status: 'delivered', paymentStatus: 'paid' } },
-      { $group: { _id: null, total: { $sum: '$totalPrice' } } }
-    ]);
-
-    let txt = `📊 ${b(esc(store.name) + ' statistikasi')}\n\n`;
-    txt += `📦 Jami buyurtmalar: ${b(String(total))}\n`;
-    txt += `⏳ Kutilayotgan: ${b(String(pending))}\n`;
-    txt += `✅ Yetkazilgan: ${b(String(delivered))}\n`;
-    txt += `💰 Daromad: ${b(esc(fmt(rev[0]?.total || 0)))}\n`;
-
-    return send(chatId, txt);
-  }
-
-  // ── 🔍 Qidiruv ────────────────────────────────────────────────────────────
-  if (text === '🔍 Qidiruv') {
-    setSession(chatId, { step: 'search', data: {} });
-    return send(chatId, '🔍 Qidiruv sozini kiriting:', { reply_markup: cancelKb() });
-  }
-
+  // ── search step ───────────────────────────────────────────────────────────
   if (session.step === 'search') {
     const products = await Product.find({
       $text: { $search: text }, isActive: true, isAvailable: true
@@ -383,24 +383,22 @@ bot.on('message', async (msg) => {
     const user = await getUser(chatId);
 
     if (!products.length) {
-      return send(chatId, `❌ ${b(esc(text))} boyicha natija topilmadi.`, {
+      return send(chatId, `❌ ${b(esc(text))} bo'yicha natija topilmadi.`, {
         reply_markup: mainMenu(!!user, user?.role)
       });
     }
 
-    let result = `🔍 ${b(esc(text))} boyicha natijalar:\n\n`;
-    products.forEach((p, i2) => {
+    let result = `🔍 ${b(esc(text))} bo'yicha natijalar:\n\n`;
+    products.forEach((p, idx) => {
       const price = p.salePrice || p.price;
-      result += `${i2 + 1}. ${b(esc(p.name))}\n`;
+      result += `${idx + 1}. ${b(esc(p.name))}\n`;
       result += `   💰 ${esc(fmt(price))}/${esc(p.unit)} | 🏪 ${esc(p.store?.name || '')}\n\n`;
     });
 
     return send(chatId, result, { reply_markup: mainMenu(!!user, user?.role) });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // LOGIN steps
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── login steps ───────────────────────────────────────────────────────────
   if (session.step === 'login_phone') {
     const phone = text.trim();
     if (!/^\+998[0-9]{9}$/.test(phone)) {
@@ -409,7 +407,7 @@ bot.on('message', async (msg) => {
     const found = await User.findOne({ phone });
     if (!found) {
       clearSession(chatId);
-      return send(chatId, "❌ Bu telefon raqam topilmadi.\n\nRoyxatdan otish: /register", {
+      return send(chatId, "❌ Bu telefon raqam topilmadi.\n\nRo'yxatdan o'tish: /register", {
         reply_markup: mainMenu(false)
       });
     }
@@ -420,7 +418,7 @@ bot.on('message', async (msg) => {
   if (session.step === 'login_password') {
     const user = await User.findOne({ phone: session.data.phone }).select('+password');
     const ok = user && await user.comparePassword(text);
-    if (!ok) return send(chatId, "❌ Parol notogri. Qayta urining:");
+    if (!ok) return send(chatId, "❌ Parol noto'g'ri. Qayta urining:");
 
     await User.findByIdAndUpdate(user._id, {
       telegramId: String(chatId),
@@ -432,12 +430,10 @@ bot.on('message', async (msg) => {
     });
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // REGISTER steps
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── register steps ────────────────────────────────────────────────────────
   if (session.step === 'reg_name') {
     if (text.length < 2 || text.length > 100) {
-      return send(chatId, "❌ Ism 2-100 ta harf bolishi kerak:");
+      return send(chatId, "❌ Ism 2-100 ta harf bo'lishi kerak:");
     }
     setSession(chatId, { step: 'reg_phone', data: { name: text } });
     return send(chatId, `📱 Telefon raqam kiriting:\n${code('+998901234567')}`);
@@ -451,17 +447,17 @@ bot.on('message', async (msg) => {
     const exists = await User.findOne({ phone });
     if (exists) {
       clearSession(chatId);
-      return send(chatId, "❌ Bu raqam allaqachon royxatdan otgan.\n\n/login", {
+      return send(chatId, "❌ Bu raqam allaqachon ro'yxatdan o'tgan.\n\n/login", {
         reply_markup: mainMenu(false)
       });
     }
     setSession(chatId, { step: 'reg_password', data: { ...session.data, phone } });
-    return send(chatId, "🔒 Parol ornating (kamida 6 ta belgi):");
+    return send(chatId, "🔒 Parol o'rnating (kamida 6 ta belgi):");
   }
 
   if (session.step === 'reg_password') {
     if (text.length < 6) {
-      return send(chatId, "❌ Parol kamida 6 ta belgi bolishi kerak:");
+      return send(chatId, "❌ Parol kamida 6 ta belgi bo'lishi kerak:");
     }
     const { name, phone } = session.data;
     try {
@@ -472,7 +468,7 @@ bot.on('message', async (msg) => {
       });
       clearSession(chatId);
       return send(chatId,
-        `🎉 ${b('Muvaffaqiyatli royxatdan otdingiz!')}\n\nXush kelibsiz, ${b(esc(user.name))}!`,
+        `🎉 ${b("Muvaffaqiyatli ro'yxatdan o'tdingiz!")}\n\nXush kelibsiz, ${b(esc(user.name))}!`,
         { reply_markup: mainMenu(true, user.role) }
       );
     } catch (err) {
@@ -488,11 +484,10 @@ bot.on('callback_query', async (query) => {
   const data = query.data;
   await bot.answerCallbackQuery(query.id).catch(() => {});
 
-  // Store detail
   if (data.startsWith('store_')) {
     const storeId = data.slice(6);
     const store = await Store.findById(storeId).lean();
-    if (!store) return send(chatId, "❌ Dokon topilmadi");
+    if (!store) return send(chatId, "❌ Do'kon topilmadi");
 
     const productCount = await Product.countDocuments({ store: storeId, isActive: true });
 
@@ -517,7 +512,6 @@ bot.on('callback_query', async (query) => {
     });
   }
 
-  // Products list
   if (data.startsWith('prods_')) {
     const parts = data.split('_');
     const storeId = parts[1];
@@ -557,7 +551,6 @@ bot.on('callback_query', async (query) => {
     });
   }
 
-  // Back to stores list
   if (data === 'back_stores') {
     const stores = await Store.find({ isActive: true })
       .sort({ isFeatured: -1, rating: -1 }).limit(10).lean();
