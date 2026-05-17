@@ -28,11 +28,16 @@ const statusText = {
   cancelled: 'Bekor qilindi', refunded: 'Qaytarildi'
 };
 
-const sendMessage = async (chatId, text, options = {}) => {
+const esc = (t) => String(t ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+const sendMessage = async (chatId, html, options = {}) => {
   try {
-    const b = getNotifierBot();
-    if (!b || !chatId) return;
-    await b.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options });
+    const nb = getNotifierBot();
+    if (!nb || !chatId) return;
+    await nb.sendMessage(chatId, html, { parse_mode: 'HTML', ...options });
   } catch (err) {
     logger.warn(`Telegram xabar yuborishda xatolik [${chatId}]: ${err.message}`);
   }
@@ -45,31 +50,33 @@ const notifyNewOrder = async (order) => {
     if (order.store?.owner) {
       const seller = await User.findById(order.store.owner).select('telegramId name');
       if (seller?.telegramId) {
-        const itemsList = order.items?.map((i) => `• ${i.name} x${i.quantity}`).join('\n') || '';
-        const text = [
-          '🔔 *Yangi buyurtma!*',
-          '',
-          `📋 *${order.orderNumber}*`,
-          `💰 Jami: *${formatCurrency(order.totalPrice)}*`,
-          '',
-          '📦 Mahsulotlar:',
+        const itemsList = order.items?.map((item) =>
+          `• ${esc(item.name)} x${item.quantity}`
+        ).join('\n') || '';
+
+        const html = [
+          `🔔 <b>Yangi buyurtma!</b>`,
+          ``,
+          `📋 <b>${esc(order.orderNumber)}</b>`,
+          `💰 Jami: <b>${esc(formatCurrency(order.totalPrice))}</b>`,
+          ``,
+          `📦 Mahsulotlar:`,
           itemsList,
-          '',
-          `📍 Manzil: ${order.deliveryAddress?.fullAddress || 'Ko\'rsatilmagan'}`,
-          `📱 Mijoz: ${order.deliveryAddress?.recipientName || ''} ${order.deliveryAddress?.recipientPhone || ''}`,
-          '',
-          'Buyurtmani tasdiqlash uchun dasturga kiring.'
+          ``,
+          `📍 Manzil: ${esc(order.deliveryAddress?.fullAddress || 'Korsatilmagan')}`,
+          `📱 Mijoz: ${esc(order.deliveryAddress?.recipientName || '')} ${esc(order.deliveryAddress?.recipientPhone || '')}`,
+          ``,
+          `Buyurtmani tasdiqlash uchun dasturga kiring.`
         ].join('\n');
 
-        await sendMessage(seller.telegramId, text);
+        await sendMessage(seller.telegramId, html);
       }
     }
 
-    // Admin notification
     const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').filter(Boolean);
     for (const adminId of ADMIN_IDS) {
       await sendMessage(adminId.trim(),
-        `🔔 Yangi buyurtma: *${order.orderNumber}* — ${formatCurrency(order.totalPrice)}`
+        `🔔 Yangi buyurtma: <b>${esc(order.orderNumber)}</b> — ${esc(formatCurrency(order.totalPrice))}`
       );
     }
   } catch (err) {
@@ -84,10 +91,10 @@ const notifyOrderStatusChange = async (order, newStatus) => {
     if (!buyer?.telegramId) return;
 
     const lines = [
-      `${statusEmoji[newStatus] || '📌'} *Buyurtma holati o\'zgardi*`,
-      '',
-      `📋 *${order.orderNumber}*`,
-      `📌 Yangi holat: *${statusText[newStatus] || newStatus}*`
+      `${statusEmoji[newStatus] || '📌'} <b>Buyurtma holati ozgardi</b>`,
+      ``,
+      `📋 <b>${esc(order.orderNumber)}</b>`,
+      `📌 Yangi holat: <b>${esc(statusText[newStatus] || newStatus)}</b>`
     ];
 
     if (newStatus === 'delivering') lines.push('', '🚚 Buyurtmangiz yetkazilmoqda!');
@@ -106,19 +113,19 @@ const notifySubscriptionPurchase = async (user, subscription) => {
     const dbUser = await User.findById(user._id || user).select('telegramId');
     if (!dbUser?.telegramId) return;
 
-    const text = [
-      '💳 *Obuna sotib olindi!*',
-      '',
-      `🎉 *${subscription.displayName || subscription.name}* obunangiz faollashtirildi.`,
-      '',
+    const html = [
+      `💳 <b>Obuna sotib olindi!</b>`,
+      ``,
+      `🎉 <b>${esc(subscription.displayName || subscription.name)}</b> obunangiz faollashtirildi.`,
+      ``,
       `📦 ${subscription.maxProducts >= 999999 ? 'Cheksiz' : subscription.maxProducts} mahsulot`,
       `🚗 ${subscription.maxVehicles >= 999999 ? 'Cheksiz' : subscription.maxVehicles} avtomobil`,
-      '⏰ 30 kun davomida',
-      '',
-      'Xarid uchun rahmat! 🙏'
+      `⏰ 30 kun davomida`,
+      ``,
+      `Xarid uchun rahmat! 🙏`
     ].join('\n');
 
-    await sendMessage(dbUser.telegramId, text);
+    await sendMessage(dbUser.telegramId, html);
   } catch (err) {
     logger.warn('notifySubscriptionPurchase xatolik:', err.message);
   }
