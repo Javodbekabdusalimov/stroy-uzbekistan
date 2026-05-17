@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: stroy-market-backend
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: API_VERSION
+        value: v1
+      - key: MONGODB_URI
+        value: mongodb+srv://javodbek:1202@cluster0.og5kdde.mongodb.net/stroy_market_uz
+      - key: JWT_SECRET
+        value: stroy_market_uzbekistan_super_secret_jwt_key_2024_very_long_and_secure
+      - key: JWT_REFRESH_SECRET
+        value: stroy_market_uzbekistan_refresh_secret_key_2024_very_long_secure
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+      - key: UPLOAD_PATH
+        value: uploads
+      - key: MAX_FILE_SIZE
+        value: 5242880
+      - key: ALLOWED_FILE_TYPES
+        value: image/jpeg,image/png,image/webp,image/jpg
+      - key: RATE_LIMIT_WINDOW
+        value: 15
+      - key: RATE_LIMIT_MAX
+        value: 100
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8716475110:AAFhz4dDaavyWZ8Grpp_ZeSzCKWXW5KuiJo
+      - key: TELEGRAM_BOT_USERNAME
+        value: stroyuzbekisatn_bot
+      - key: APP_URL
+        value: https://stroy-market-backend.onrender.com
+      - key: FRONTEND_URL
+        value: https://stroy-market-backend.onrender.com
